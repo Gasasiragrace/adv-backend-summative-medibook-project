@@ -1,130 +1,119 @@
-# Final Assessment — Backend Development
+# MediBook - Clinic Appointment Booking Backend
 
-**Weight:** 30% of final grade
-**Duration:** 2 weeks
-**Mode:** Individual project
-**Stack (mandatory):** Node.js, Express.js, MySQL (with parameterized queries only), Redis
+Express.js + MySQL (`mysql2`, parameterized queries only, no ORM) + Redis (`ioredis`). Includes a separate background worker, an `fs`-based audit log, Jest unit tests and a bilingual feedback page.
 
----
+## Requirements
+- Node.js 18+
+- MySQL **8.0.16+** (CHECK constraints are enforced from this version)
+- Redis **6.2+** (uses `LMOVE`)
 
-## Scenario — "MediBook" Clinic Appointment System
-
-A community clinic wants a backend service for booking doctor appointments. Doctors see patients in fixed 30-minute slots during working hours (09:00–17:00), each doctor can handle at most **12 appointments per day**, and the clinic administrator needs reports. You will design the database, build the API, and handle the operational concerns (background jobs, logging, testing).
-
-**Entity limit:** Your database must contain **exactly 3 entities**:
-
-| Entity | Purpose |
-|---|---|
-| `patients` | People who book appointments |
-| `doctors` | Doctors with a specialty, consultation fee, and room |
-| `appointments` | A patient's booking with a doctor at a specific date/time (links the other two) |
-
-You may add columns as needed, but no additional tables (lookup/locale JSON files don't count).
-
----
-
-## Part A — Database Design & Normalization
-
-The clinic currently tracks everything in this single spreadsheet:
-
-| appt_ref | patient_name | patient_email | patient_phone | doctor_name | specialty | consultation_fee | room | appt_datetime | amount_paid | booked_on |
-|---|---|---|---|---|---|---|---|---|---|---|
-| AP-001 | Ama Mensah | ama@mail.com | 0244-111-222 | Dr. Boateng | Dermatology | 150.00 | R-12 | 2026-08-10 09:00 | 150.00 | 2026-07-01 |
-| AP-002 | Kojo Owusu | kojo@mail.com | 0555-333-444 | Dr. Boateng | Dermatology | 150.00 | R-12 | 2026-08-10 09:30 | 120.00 | 2026-07-02 |
-| AP-003 | Ama Mensah | ama@mail.com | 0244-111-222 | Dr. Adjei | Paediatrics | 100.00 | R-03 | 2026-08-15 10:00 | 100.00 | 2026-07-03 |
-
-Study the spreadsheet, then produce a **database schema diagram** of your design in fully normalized form (up to 3NF). The diagram must show **everything**:
-
-- all 3 entities with every column and its MySQL data type,
-- primary keys and foreign keys, clearly marked,
-- the relationships between the entities and their cardinality (1:N, etc.),
-- every constraint that enforces a business rule (`NOT NULL`, `UNIQUE`, `CHECK`) — in particular, it must be visible from the diagram that *a doctor cannot have two appointments at the same date/time*.
-
-Use any tool you like (dbdiagram.io, draw.io) and include it in your repository as `schema-diagram` (image or PDF).
-
-## Part B — Database Implementation & Project Setup
-
-1. **Table creation.** Translate your Part A diagram into a MySQL DDL script, `database/schema.sql`, that creates the database and the 3 tables — data types, primary keys, foreign keys, and every constraint shown on the diagram. The script must run cleanly on a fresh MySQL server. Also provide `database/seed.sql` with realistic sample data: at least 3 patients, 3 doctors (including one with no appointments), and 8 appointments (including one doctor-day at or near the 12-slot daily cap).
-
-2. **Project structure.** Set up the Express project in a **models / controllers / routes** structure:
-
+## Setup
+```bash
+git clone https://github.com/Gasasiragrace/adv-backend-summative-medibook-project.git
+cd adv-backend-summative-medibook-project
+npm install
+cp .env.example .env        # then put your MySQL password in .env
 ```
-├── database/          schema.sql and seed.sql (Part B.1)
-└── src/
-    ├── models/        all application SQL lives here — nowhere else
-    ├── controllers/   business logic; calls model functions, never the DB directly
-    └── routes/        maps URLs and HTTP methods to controllers
+1. Start MySQL and Redis (for example `redis-server`, and your MySQL service).
+2. Create the database and sample data - either:
+   - `npm run db:setup` (runs both SQL files using your `.env`), or
+   - manually: `mysql -u root -p < database/schema.sql && mysql -u root -p < database/seed.sql`
+3. Start the web server: `npm start` (http://localhost:3000)
+4. In a **second terminal** start the worker: `npm run worker`
+5. Tests (need neither MySQL nor Redis): `npm test`
+
+> `schema.sql` begins with `DROP DATABASE IF EXISTS medibook` so it can be re-run for a clean slate.
+
+`.env.example`:
+```
+PORT=3000
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=change_me
+DB_NAME=medibook
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+AUDIT_LOG_PATH=logs/audit.log
 ```
 
-Every SQL statement in the application must use **parameterized queries** (`?` placeholders via `mysql2`). SQL found in a controller or route file loses marks. **Do not use any ORM for this assignment.**
+## Project layout
+```
+database/    schema.sql, seed.sql
+schema-diagram.(svg|png|pdf), schema.dbml
+locales/     en.json, fr.json
+src/
+  config/      env + ALL business constants (12-slot cap, hours, refund tiers) defined once
+  models/      ALL SQL lives here (patient, doctor, appointment, report)
+  services/    business rules (booking, cancellation, waitlist)
+  controllers/ HTTP in/out; call services/models, never the DB
+  routes/      URL + method -> controller
+  queue/       Redis job queue + waitlist queue
+  worker/      separate worker process
+  middleware/  async wrapper, central error handler
+  utils/       pure functions (slot validator, refund calculator, validators), audit logger
+tests/       Jest unit tests
+```
 
-## Part C — Controllers & Endpoints
+## API
+| Method & path | Purpose | Success |
+|---|---|---|
+| `POST/GET /api/patients`, `GET/PUT/DELETE /api/patients/:id` | patient CRUD | 201 / 200 / 204 |
+| `POST/GET /api/doctors`, `GET/PUT/DELETE /api/doctors/:id` | doctor CRUD | 201 / 200 / 204 |
+| `GET /api/doctors/:id/statistics` | revenue, upcoming count, next-7-days per day, utilization % | 200 |
+| `POST /api/appointments` | book `{patientId, doctorId, appointmentDatetime: "YYYY-MM-DD HH:mm"}` | 201 |
+| `GET /api/appointments`, `GET /api/appointments/:id` | list (filters `doctorId`, `patientId`, `status`) / read one | 200 |
+| `DELETE /api/appointments/:id` | cancel + refund (response states the refund) | 200 |
+| `POST /api/waitlist`, `GET /api/waitlist?doctorId=&date=YYYY-MM-DD` | join / view waitlist | 201 / 200 |
+| `GET /api/reports/doctors` | every doctor's totals + revenue (incl. zero appointments) | 200 |
+| `GET /api/reports/busy-days` | (doctor, date) with >80% of 12 slots booked | 200 |
+| `GET /feedback?lang=en\|fr` | i18n feedback page | 200 |
 
-Implement endpoints for the operations below. **Designing the API is part of the assessment**: you choose the URL paths, the HTTP methods, and how the endpoints are grouped into controllers and routes — your choices should follow REST conventions and will be marked. The business rules listed are **requirements** — *how* you satisfy them is your design decision, and you will be asked to defend it at the viva.
-
-1. **Basic CRUD** — standard **C**reate, **R**ead (one and all), **U**pdate, and **D**elete operations for patients and for doctors, with sensible validation. (Appointments get their create/delete behaviour from the two operations below — no separate CRUD needed there.)
-
-2. **Book an appointment**. Rules that must always hold:
-   - Appointments can only be booked in the future, within working hours (09:00–17:00), on a 30-minute slot boundary.
-   - A doctor never exceeds 12 appointments in a day.
-   - Two patients can never hold the same doctor slot — even when both requests arrive at the same instant.
-
-3. **Cancel an appointment**. Rules:
-   - The refund is computed by the server from the notice given: more than 48 hours → 100%; 24–48 hours → 50%; less than 24 hours → 0%. The response states the refund amount.
-   - The cancellation and its refund record succeed or fail together.
-   - A cancelled slot becomes bookable by another patient, while the cancellation record is kept for refund history.
-   - A cancellation notifies the waitlist (Part E).
-
-4. **Doctor statistics** — for a given doctor: revenue collected, upcoming appointment count, appointments per day for the next 7 days, and utilization % against the 12-slot daily cap.
-
-Operations 5 and 6 are where your **advanced SQL** is assessed: the results must be produced by the SQL in your models (joins, aggregates, etc) — not fetched raw and computed in JavaScript.
-
-5. **Doctors report** — every doctor's total appointments and revenue collected, including doctors with zero appointments.
-6. **Busy days report** — every (doctor, date) where more than 80% of the 12-slot daily capacity is booked.
-
-### General requirements (all endpoints)
-
-Input validation with meaningful `400` messages; correct status codes (`201`, `404`, `409`, `422`); a central error-handling middleware.
-
-## Part D — Node.js `fs` Module
-
-**Audit log:** every successful booking and cancellation must be appended as a JSON line to `logs/audit.log` using the `fs` module (async, non-blocking — no `*Sync` calls inside request handlers). The logger must create the `logs/` directory on first run if it doesn't exist, and a logging failure must **not** fail the user's request.
-
-## Part E — Queues & Redis
-
-1. **Waitlist queue:** when the requested slot (or the doctor's whole day) is fully booked, offer the patient a waitlist spot — push them onto a queue (Redis list, or Bull/BullMQ). When a cancellation frees a slot, a **worker process** (separate from the web server) pops the first waitlisted patient and books them in. Think through: what happens if the promoted booking itself fails? The patient must not simply vanish from both the queue and the appointments table.
-2. **Notification jobs:** every confirmed appointment enqueues a "confirmation SMS/email" job; the worker processes it by writing the message to the audit log (no real sending needed).
-
-## Part F — Unit Testing
-
-Using Jest, write **at least 6 meaningful unit tests**:
-
-- The refund calculator from Part C.3 — cover all three tiers **and both boundaries** (exactly 24 hours, exactly 48 hours). Boundary behaviour must match your documented policy.
-- One validation function of your choice — e.g., the slot-alignment/working-hours check — including at least one edge case (17:00 exactly? 09:15? a malformed date?).
-
-Tests must not require a live MySQL or Redis connection — that's the point of extracting pure functions. `npm test` must run them.
-
-## Part G — i18n & l10n: Course Feedback Page
-
-Create a **simple HTML page** (served by your Express app at `GET /feedback`) containing a short course-feedback form with **exactly 5 essay questions** (each answered in a `<textarea>`):
-
-1. Which topic in this course did you find most challenging, and why?
-2. Describe one concept you understood only after the practical assignments. What made it click?
-3. How has your approach to designing databases or APIs changed since the start of the trimester?
-4. What would you improve about how this course was taught or assessed?
-5. How do you plan to apply what you learned in this course going forward?
-
-**i18n/l10n requirement (keep it simple):** the page title, instructions, and all 5 questions must be loaded from locale files (e.g., `locales/en.json` and `locales/fr.json` — English plus one other language of your choice). Visiting `/feedback?lang=fr` shows the translated page; the default is English, and an unsupported `lang` value must fall back to English rather than crash. Display today's date on the page formatted for the active locale (e.g., using `Intl.DateTimeFormat`).
+Status codes: **400** malformed input, **404** unknown id/route, **409** conflict (slot taken, daily cap, duplicate email, already cancelled, in use), **422** valid format but breaks a rule (past, outside hours, off the 30-minute boundary, cancelling a past appointment). Errors are all `{status, code, message, ...}` from one central middleware.
 
 ---
 
-## Submission Requirements
+## Written justifications
 
-- Git repository (with meaningful commit history — a single "final commit" will be questioned) containing:
-  - `schema-diagram` (image or PDF), `schema.sql`, and `seed.sql` (as specified in Part B)
-  - Application source, worker process, tests, locale files
-  - `README.md` with: setup steps, `.env.example`, and the short written justifications requested in Parts C, D, and E
-- The app must start with `npm install && npm start` (plus documented MySQL/Redis setup) and tests with `npm test`.
-- A short **viva/demo (10 minutes)** walkthrough.
+### Part C - API design and business rules
+- **REST design.** Nouns in URLs, verbs in methods; `PUT` for full replacement; `204` on delete of patients/doctors. Statistics are a sub-resource of the doctor; reports are under `/api/reports`.
+- **Cancel = `DELETE /api/appointments/:id`.** The appointment leaves the active schedule, but the row is kept (soft delete) for refund history. The response is `200` with the refund, not `204`, because the client needs the refund amount.
+- **Working hours.** A slot must *end* by 17:00, so the last bookable start is **16:30**; `17:00` is rejected. That gives 16 slots/day, so the 12-per-day cap is meaningful.
+- **No double booking, even simultaneously.** Two layers: (1) inside a transaction the booking locks the doctor's row (`SELECT ... FOR UPDATE`), serialising all bookings for that doctor; (2) a `UNIQUE (doctor_id, appt_datetime, active_flag)` index is the database-level guard. I tested 15 simultaneous requests for one slot: exactly one `201`, fourteen `409`.
+- **Daily cap race.** The "count the day, then insert" step is the classic check-then-act race. The doctor-row lock makes it atomic per doctor. Tested with 11 booked and 8 concurrent requests for different slots: exactly one succeeds, the day ends at 12.
+- **Cancelled slot is rebookable but the record is kept.** `active_flag` is a generated column that is `1` while `status='booked'` and `NULL` once cancelled. `NULL`s never collide in a UNIQUE index, so the cancelled row stops blocking the slot but stays in the table.
+- **Refund policy (computed by the server only).** `> 48h` -> 100%; `24h <= notice <= 48h` -> 50%; `< 24h` -> 0%. **Both boundaries belong to the 50% tier**: exactly 48h and exactly 24h each refund 50%, because "more than 48 hours" is the only way to get 100% and "less than 24 hours" the only way to get 0%. Money is rounded in cents.
+- **Cancellation + refund atomic.** The row is locked, the refund is computed, and status + `refund_percent` + `refund_amount` + `cancelled_at` are written in one transaction (a CHECK also forbids a cancelled row without refund data).
+- **Why some rule checks sit inside the model.** The race-sensitive checks must run *inside* the transaction, so the model performs the locked reads and calls a `guard`/`decide` callback supplied by the service. SQL stays in models; the rules (cap, refund) stay in services.
+- **"Revenue collected"** = `SUM(amount_paid - refund_amount)`, i.e. what the clinic keeps after refunds. Statistics and both reports are produced by SQL (JOINs, aggregates, a recursive CTE for the zero-filled 7-day series, `HAVING` for busy days), not JavaScript.
+- **Busy days.** More than 80% of 12 = more than 9.6, so 10+ booked slots; computed as `100*COUNT/12 > 80` in SQL.
 
-**Automatic penalties:** SQL injection vector anywhere in the app (−15), secrets committed to the repo (−5), app does not start per README instructions (−10), work the student cannot explain in the video (or at a follow-up viva if called) | Academic integrity referral; affected criteria re-scored at Developing or below |
+### Part D - Audit log (`fs`)
+`src/utils/auditLogger.js` uses `fs.promises.mkdir(..., {recursive: true})` and `fs.promises.appendFile`, so no `*Sync` call is ever made while serving a request. `logs/` is created the first time it is needed (and at startup). The function wraps everything in `try/catch` and **never rejects**, so a full disk or permissions error is printed to stderr but cannot fail a booking or cancellation. One JSON object per line, e.g. `appointment_booked`, `appointment_cancelled`, `waitlist_joined`, `waitlist_promoted`, `confirmation_sent`.
+
+### Part E - Queues and Redis
+- **Waitlist.** When a slot is taken or the day is full, the 409 response *offers* the waitlist and `POST /api/waitlist` joins it (refused with 409 if the slot is actually free). Each doctor-day has its own FIFO Redis list.
+- **Separate worker.** `npm run worker` is its own process and blocks on `BLPOP` of a job list on a dedicated Redis connection. Cancelling enqueues a `slot_freed` job; the worker books the first waitlisted patient into the freed slot. (The patient gets the *freed* slot, which may differ from the time they originally asked for; waitlists are per doctor-day.)
+- **If the promoted booking fails, the patient never vanishes.** The worker does not `POP`; it atomically `LMOVE`s the head into an *in-flight* list, tries the booking, and only then removes it. Outcomes:
+  - success -> removed from in-flight, patient has an appointment;
+  - slot grabbed meanwhile / no longer bookable (409/422) -> put back at the **front** of the queue, keeping their place;
+  - infrastructure error -> put back at the front and the job is retried (max 3 attempts);
+  - the patient can never be booked (e.g. deleted, 404) -> moved to `medibook:waitlist:failed` with the reason, and the worker tries the next person;
+  - worker crash mid-booking -> on start-up the worker moves any in-flight entries back to their waiting lists (assumes a single worker).
+- **Confirmation jobs.** Every successful booking (API or waitlist promotion) enqueues a `confirmation` job; the worker "sends" it by writing a `confirmation_sent` line to the audit log. If Redis is down, bookings still succeed (the enqueue error is logged) but joining the waitlist returns `503`.
+
+### Tests (Part F)
+19 Jest tests in `tests/`: refund tiers and both exact boundaries (fixed dates), rounding, input rejection; slot validator (valid, 16:30, 17:00, 08:30, 09:15, past, malformed/impossible date); input validators. They import only pure functions, so no MySQL or Redis is needed.
+
+### Part G
+`GET /feedback` renders 5 `<textarea>` questions from `locales/en.json` / `locales/fr.json`. `?lang=fr` translates; missing, unknown or non-string `lang` falls back to English. Today's date uses `Intl.DateTimeFormat` for the active locale.
+
+## Demo checklist for the video (about 10 min)
+1. Show `schema-diagram` and explain the unique key + generated `active_flag`.
+2. `npm start`, `npm run worker`; `GET /api/doctors`.
+3. Booking rules: past / 09:15 / 17:00 rejected; a valid booking -> audit log + confirmation line.
+4. Race: fire parallel booking requests (e.g. several terminals or a small script) and show one winner.
+5. Cancel: refund response; re-book the cancelled slot; `GET /api/appointments/:id` shows the history kept.
+6. Waitlist: Dr. Boateng (id 1) is full three days from the seed date -> 409 with offer -> join -> cancel one of his appointments -> worker promotes -> show audit log.
+7. `GET /api/doctors/1/statistics`, `/api/reports/doctors` (Dr. Owusu-Ansah has zero), `/api/reports/busy-days`.
+8. `/feedback` and `/feedback?lang=fr`; run `npm test`.
