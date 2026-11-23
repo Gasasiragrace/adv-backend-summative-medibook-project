@@ -1,0 +1,32 @@
+// Paste into https://dbdiagram.io to render an interactive version of the same schema.
+Table patients {
+  id int [pk, increment]
+  full_name varchar(100) [not null]
+  email varchar(150) [not null, unique]
+  phone varchar(20) [not null]
+  created_at datetime [not null, default: `now()`]
+}
+Table doctors {
+  id int [pk, increment]
+  full_name varchar(100) [not null]
+  specialty varchar(80) [not null]
+  consultation_fee decimal(10,2) [not null, note: 'CHECK >= 0']
+  room varchar(10) [not null]
+  created_at datetime [not null, default: `now()`]
+}
+Table appointments {
+  id int [pk, increment]
+  patient_id int [not null, ref: > patients.id]
+  doctor_id int [not null, ref: > doctors.id]
+  appt_datetime datetime [not null]
+  amount_paid decimal(10,2) [not null]
+  status enum('booked','cancelled') [not null, default: 'booked']
+  refund_percent tinyint
+  refund_amount decimal(10,2)
+  cancelled_at datetime
+  booked_on datetime [not null, default: `now()`]
+  active_flag tinyint [note: 'generated: 1 if booked else NULL']
+  indexes {
+    (doctor_id, appt_datetime, active_flag) [unique, name: 'uq_doctor_active_slot']
+  }
+}
