@@ -3,17 +3,10 @@ const path = require('path');
 const config = require('../config');
 
 const logFile = path.resolve(config.auditLogPath);
-let directoryReady = null;
 
-// Creates logs/ on first use (async). A failed attempt is not cached, so the next write retries.
+// Idempotent and async: creates logs/ if it is missing, and recreates it if it is deleted while running.
 function ensureLogDirectory() {
-  if (!directoryReady) {
-    directoryReady = fs.promises.mkdir(path.dirname(logFile), { recursive: true }).catch((error) => {
-      directoryReady = null;
-      throw error;
-    });
-  }
-  return directoryReady;
+  return fs.promises.mkdir(path.dirname(logFile), { recursive: true });
 }
 
 /**
