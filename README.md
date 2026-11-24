@@ -1,3 +1,5 @@
+Demo video: https://youtu.be/9TI9or-CPX8
+
 # MediBook - Clinic Appointment Booking Backend
 
 Express.js + MySQL (`mysql2`, parameterized queries only, no ORM) + Redis (`ioredis`). Includes a separate background worker, an `fs`-based audit log, Jest unit tests and a bilingual feedback page.
